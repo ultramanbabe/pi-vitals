@@ -6,7 +6,7 @@ A FastAPI/WebSocket server runs on the PC and reads CPU, GPU, RAM, drives, and n
 
 ## Hardware tested on
 
-- **PC**: CachyOS (Arch-based), AMD Ryzen 7 9800X3D, ASUS PRIME Radeon RX 9070 XT, MSI nct6687-based motherboard
+- **PC**: CachyOS (Arch-based), AMD Ryzen 7 9800X3D, ASUS PRIME Radeon RX 9070 XT, MSI PRO X870-P WiFi (nct6687-based motherboard)
 - **Pi**: Raspberry Pi Zero 2W, Raspberry Pi OS Lite (Trixie 32-bit), 7″ 1024×600 HDMI display
 
 The server side is Linux-specific (sysfs, hwmon, powercap). Frontend is plain HTML/JS — no framework.
