@@ -4,7 +4,9 @@ import os
 import re
 import socket
 import subprocess
+import threading
 import time
+import urllib.request
 
 import psutil
 
@@ -335,6 +337,32 @@ def _disk():
     return {"drives": _drives(), "read_bps": r, "write_bps": w}
 
 
+_public_ip = None
+_public_ip_lock = threading.Lock()
+
+
+def _refresh_public_ip():
+    """Background-refresh the public IP every 10 min — never blocks collect()."""
+    global _public_ip
+    while True:
+        try:
+            req = urllib.request.Request(
+                "https://api.ipify.org",
+                headers={"User-Agent": "pi-vitals/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as r:
+                ip = r.read().decode().strip()
+                if ip and len(ip) <= 45:  # sane bound (IPv6 is ≤45 chars)
+                    with _public_ip_lock:
+                        _public_ip = ip
+        except (OSError, urllib.error.URLError):
+            pass
+        time.sleep(600)
+
+
+threading.Thread(target=_refresh_public_ip, daemon=True).start()
+
+
 def _net():
     up, down = _net_speed()
     nvme_temps = []
@@ -342,7 +370,9 @@ def _net():
         t = _read(os.path.join(h, "temp1_input"), cast=int)
         if t is not None:
             nvme_temps.append(round(t / 1000, 1))
-    return {"up_bps": up, "down_bps": down, "nvme_temps_c": nvme_temps}
+    with _public_ip_lock:
+        ip = _public_ip
+    return {"up_bps": up, "down_bps": down, "nvme_temps_c": nvme_temps, "public_ip": ip}
 
 
 def collect():

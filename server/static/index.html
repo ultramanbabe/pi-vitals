@@ -113,7 +113,7 @@
   }
 
   .bar {
-    height: 14px; background: #2f3a48; border-radius: 4px; overflow: hidden;
+    height: 14px; background: #4a5868; border-radius: 4px; overflow: hidden;
   }
   .bar > span { display: block; height: 100%; width: 0%; transition: width .5s linear; border-radius: 4px; }
 
@@ -124,7 +124,7 @@
     width: 100%;
   }
   .core {
-    height: 40px; background: #2f3a48; border-radius: 3px;
+    height: 40px; background: #4a5868; border-radius: 3px;
     position: relative; overflow: hidden;
   }
   .core > i {
@@ -168,25 +168,25 @@
     flex: 0 0 auto;
     line-height: 1.3;
   }
-  .drives { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .drives { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
   .drive {
     display: grid;
-    grid-template-columns: 16px 1fr auto auto;
+    grid-template-columns: 18px 1fr auto auto;
     grid-template-rows: auto auto;
-    column-gap: 8px;
-    row-gap: 3px;
+    column-gap: 10px;
+    row-gap: 6px;
     align-items: center;
-    font-size: 14px;
-    line-height: 1.15;
+    font-size: 15px;
+    line-height: 1.2;
   }
-  .drive .bar { grid-column: 1 / -1; height: 5px; }
+  .drive .bar { grid-column: 1 / -1; height: 6px; }
   .drive .nm { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .drive .sz { color: var(--mute); font-variant-numeric: tabular-nums; min-width: 80px; text-align: right; }
   .drive .tp { color: var(--mute); font-variant-numeric: tabular-nums; min-width: 36px; text-align: right; }
   .drive .badge {
-    width: 16px; height: 16px; border-radius: 3px;
+    width: 18px; height: 18px; border-radius: 3px;
     display: inline-flex; align-items: center; justify-content: center;
-    font-size: 9px; font-weight: 700; letter-spacing: .04em;
+    font-size: 10px; font-weight: 700; letter-spacing: .04em;
     color: #0b0d10;
   }
   .badge.nvme { background: var(--disk-r); }
@@ -230,7 +230,7 @@
       <div class="row"><span id="ram-used">—</span><span class="v" id="ram-free">—</span></div>
       <div class="bar"><span id="ram-bar" style="background: var(--ram);"></span></div>
       <div class="row" style="margin-top:6px"><span>Swap</span><span class="v" id="swap">—</span></div>
-      <div class="bar"><span id="swap-bar" style="background:#5a6878;"></span></div>
+      <div class="bar"><span id="swap-bar" style="background:#a8b2c0;"></span></div>
     </div>
 
     <!-- VRAM -->
@@ -246,6 +246,7 @@
     <div class="card">
       <h2>Network <span class="sub" id="net-scale">—</span></h2>
       <canvas class="netgauge" id="net-gauge"></canvas>
+      <canvas class="spark" id="net-spark"></canvas>
     </div>
 
     <!-- Disk / Storage -->
@@ -318,6 +319,25 @@
     if (t >= warn) return "warn";
     return "";
   }
+
+  // Lerp temperature → mint → amber → red, per-component (low, high) range.
+  const TEMP_STOPS = [
+    [0.0, [ 45, 255, 128]],   // #2dff80 vivid green
+    [0.5, [255, 204,   0]],   // #ffcc00 saturated amber
+    [1.0, [255,  71,  71]],   // #ff4747 vivid red
+  ];
+  function tempColor(t, low, high) {
+    if (t == null) return "#ffffff";
+    const n = Math.max(0, Math.min(1, (t - low) / (high - low)));
+    let i = 0;
+    while (i < TEMP_STOPS.length - 1 && n > TEMP_STOPS[i + 1][0]) i++;
+    const [t0, c0] = TEMP_STOPS[i];
+    const [t1, c1] = TEMP_STOPS[i + 1] || TEMP_STOPS[i];
+    const f = t1 === t0 ? 0 : (n - t0) / (t1 - t0);
+    const c = c0.map((v, j) => Math.round(v + (c1[j] - v) * f));
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+  const escHtml = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
   function prep(canvas) {
     const dpr = (window.devicePixelRatio || 1) * 1.5;   // 1.5× super-sample — smooth but cheap on Pi Zero
@@ -430,7 +450,7 @@
     ctx.beginPath();
     ctx.lineWidth = lw;
     ctx.lineCap = "round";
-    ctx.strokeStyle = "#2f3a48";
+    ctx.strokeStyle = "#4a5868";
     ctx.arc(cx, cy, r, start, start + span);
     ctx.stroke();
     // Fill
@@ -476,10 +496,6 @@
     const dParts = fmtBps(downRaw), uParts = fmtBps(upRaw);
     drawGauge(ctx, cx1, cy, r, lw, downSmooth / max, COLORS["net-down"], [dParts[0], dParts[1]], "↓ DOWN");
     drawGauge(ctx, cx2, cy, r, lw, upSmooth / max, COLORS["net-up"], [uParts[0], uParts[1]], "↑ UP");
-    // update scale label
-    const m = fmtBps(max);
-    const scaleEl = document.getElementById("net-scale");
-    if (scaleEl) scaleEl.textContent = `max ${m[0]} ${m[1]}`;
   }
 
   function drawSparkDual(canvas, up, down, cUp, cDown, scrollFrac) {
@@ -532,13 +548,16 @@
     const cpuFan = cpu.fan_rpm != null ? cpu.fan_rpm + " rpm" : "—";
     const cpuPow = cpu.power_w != null ? cpu.power_w.toFixed(0) + " W" : "—";
     $("cpu-temp").textContent = `${cpuTemp} · ${cpuFan} · ${cpuPow}`;
-    $("cpu-temp").className = "v " + tempClass(cpu.temp_c, 75, 90);
+    $("cpu-temp").className = "v";
     pushSeries("cpu", cpu.usage ?? 0);
     if (cpu.per_core) {
       ensureCores(cpu.per_core.length);
       const cores = $("cpu-cores").children;
+      // Floor at 2.5% so even idle threads show a 1px stripe (.core is 40px tall, 2.5% = 1px).
+      // Avoids the visual "popping" of low loads — always at least the baseline.
       cpu.per_core.forEach((p, i) => {
-        cores[i].firstElementChild.style.height = p + "%";
+        const eff = Math.max(2.5, p);
+        cores[i].firstElementChild.style.height = eff + "%";
       });
     }
 
@@ -549,7 +568,7 @@
     $("gpu-clk").textContent = (gpu.sclk_mhz ? gpu.sclk_mhz + " MHz" : "");
     const te = gpu.temp_edge, tj = gpu.temp_junction, tm = gpu.temp_mem;
     $("gpu-temps").textContent = [te, tj, tm].map(t => t != null ? t.toFixed(0) + "°" : "—").join(" / ");
-    $("gpu-temps").className = "v " + tempClass(Math.max(te ?? 0, tj ?? 0, tm ?? 0), 85, 100);
+    $("gpu-temps").className = "v";
     const fan = gpu.fan_rpm != null ? gpu.fan_rpm + " rpm" : "—";
     const pw = gpu.power_w != null ? gpu.power_w.toFixed(0) + " W" : "—";
     $("gpu-power").textContent = pw + " · " + fan;
@@ -581,6 +600,7 @@
     const net = d.net || {};
     pushSeries("net_up", net.up_bps ?? 0);
     pushSeries("net_down", net.down_bps ?? 0);
+    $("net-scale").textContent = net.public_ip || "—";
     $("nvme-temp").textContent = (net.nvme_temps_c && net.nvme_temps_c.length)
       ? net.nvme_temps_c.map(t => t.toFixed(0)+"°").join(" / ") : "";
 
@@ -645,6 +665,7 @@
     drawSpark($("gpu-spark"), series.gpu, COLORS["gpu"], t);
     drawSpark($("vram-spark"), series.vram, COLORS["vram"], t);
     drawNetGauge($("net-gauge"), t);
+    drawSparkDual($("net-spark"), series.net_up, series.net_down, COLORS["net-up"], COLORS["net-down"], t);
     drawSparkDual($("disk-spark"), series.disk_w, series.disk_r, COLORS["disk-w"], COLORS["disk-r"], t);
   }
   requestAnimationFrame(frame);
