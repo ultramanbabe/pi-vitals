@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=1024, initial-scale=1" />
+<title>hwmon</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --bg2: #12161b;
+    --line: #6a7a8d;
+    --fg: #ffffff;
+    --mute: #c5cfd9;
+    --cpu: #6ea8fe;
+    --gpu: #ff7a6b;
+    --ram: #b08bff;
+    --vram: #ffb86b;
+    --net-up: #6ee7c7;
+    --net-down: #f0a3d2;
+    --disk-r: #7dd3fc;
+    --disk-w: #fbbf24;
+    --warn: #ffb454;
+    --crit: #ff5d5d;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: var(--bg); color: var(--fg);
+    font-family: -apple-system, "Segoe UI", "Inter", system-ui, sans-serif;
+    font-feature-settings: "tnum" 1;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    cursor: none;
+  }
+  * { cursor: none !important; }
+  .app {
+    width: 100vw; height: 100vh;
+    display: grid;
+    grid-template-rows: 44px 1fr;
+    padding: 6px 10px;
+    gap: 6px;
+  }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 4px;
+    color: var(--mute);
+    font-size: 20px;
+    letter-spacing: .04em;
+    text-transform: none;
+    font-weight: 700;
+    font-family: ui-monospace, "DejaVu Sans Mono", "Liberation Mono", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  .topbar .host { color: var(--fg); font-weight: 700; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--crit); display: inline-block; margin-right: 6px; transition: background .2s; }
+  .dot.ok { background: #4ade80; box-shadow: 0 0 8px #4ade80; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 6px;
+    min-height: 0;
+  }
+  .card {
+    background: var(--bg2);
+    border: 2px solid var(--line);
+    border-radius: 10px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    overflow: hidden;
+    position: relative;
+  }
+  .card h2 {
+    margin: 0;
+    font-size: 13px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--mute);
+    font-weight: 600;
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .card h2 .sub { color: var(--fg); font-size: 14px; letter-spacing: .08em; font-weight: 500; }
+  .big {
+    font-size: 44px;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: -.02em;
+    transition: color .3s;
+    flex: 0 0 auto;
+  }
+  .big .unit { font-size: 18px; color: var(--mute); margin-left: 4px; font-weight: 400; }
+
+  .row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 16px; color: #e8eef5;
+    font-weight: 500;
+  }
+  .row .v { color: var(--fg); font-variant-numeric: tabular-nums; }
+
+  canvas.spark {
+    width: 100%;
+    height: 48px;
+    display: block;
+    margin-top: auto;
+  }
+  canvas.netgauge {
+    width: 100%;
+    flex: 1 1 0;
+    display: block;
+    min-height: 0;
+  }
+
+  .bar {
+    height: 14px; background: #2f3a48; border-radius: 4px; overflow: hidden;
+  }
+  .bar > span { display: block; height: 100%; width: 0%; transition: width .5s linear; border-radius: 4px; }
+
+  .cores {
+    display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px;
+    margin: 4px auto 0;
+    max-width: 290px;
+    width: 100%;
+  }
+  .core {
+    height: 40px; background: #2f3a48; border-radius: 3px;
+    position: relative; overflow: hidden;
+  }
+  .core > i {
+    position: absolute; left: 0; bottom: 0; width: 100%;
+    background: linear-gradient(to top, var(--cpu), #9bc2ff);
+    transition: height .45s linear;
+  }
+  .core::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(to top, transparent 0, transparent 49%, rgba(255,255,255,.06) 50%, transparent 51%);
+    pointer-events: none;
+  }
+
+  .pill {
+    display: inline-block; padding: 2px 8px;
+    border-radius: 999px; font-size: 11px;
+    background: #1a2028; color: var(--mute);
+    font-variant-numeric: tabular-nums;
+  }
+  .pill.warn { background: rgba(255,180,84,.15); color: var(--warn); }
+  .pill.crit { background: rgba(255,93,93,.18); color: var(--crit); }
+
+  .stack { display: flex; flex-direction: column; gap: 4px; }
+  .ml { margin-left: 6px; }
+  .right { text-align: right; }
+
+  .grid-net {
+    display: grid; grid-template-rows: auto 1fr;
+    gap: 4px;
+  }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .twocol .lbl { font-size: 13px; color: var(--mute); letter-spacing: .14em; text-transform: uppercase; }
+  .twocol .num { font-size: 26px; font-weight: 600; line-height: 1; margin-top: 2px; }
+  .twocol .num .unit { font-size: 13px; color: var(--mute); margin-left: 3px; font-weight: 400; }
+
+  .label { font-size: 10px; color: var(--mute); letter-spacing: .14em; text-transform: uppercase; }
+  .model {
+    font-size: 15px; color: var(--fg);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-weight: 700;
+    flex: 0 0 auto;
+    line-height: 1.3;
+  }
+  .drives { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .drive {
+    display: grid;
+    grid-template-columns: 16px 1fr auto auto;
+    grid-template-rows: auto auto;
+    column-gap: 8px;
+    row-gap: 3px;
+    align-items: center;
+    font-size: 14px;
+    line-height: 1.15;
+  }
+  .drive .bar { grid-column: 1 / -1; height: 5px; }
+  .drive .nm { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .drive .sz { color: var(--mute); font-variant-numeric: tabular-nums; min-width: 80px; text-align: right; }
+  .drive .tp { color: var(--mute); font-variant-numeric: tabular-nums; min-width: 36px; text-align: right; }
+  .drive .badge {
+    width: 16px; height: 16px; border-radius: 3px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 700; letter-spacing: .04em;
+    color: #0b0d10;
+  }
+  .badge.nvme { background: var(--disk-r); }
+  .badge.ssd  { background: #94a3b8; }
+  .badge.hdd  { background: #6b7280; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div><span id="dot" class="dot"></span> <span class="host" id="host">—</span></div>
+    <div><span id="uptime">—</span> &nbsp;·&nbsp; <span id="date">—</span> &nbsp;<span id="clock">—</span></div>
+  </div>
+
+  <div class="grid">
+    <!-- CPU -->
+    <div class="card">
+      <h2>CPU <span class="sub" id="cpu-freq">—</span></h2>
+      <div class="model" id="cpu-model">—</div>
+      <div class="big" id="cpu-pct">0<span class="unit">%</span></div>
+      <div class="row" style="justify-content:flex-end"><span class="v" id="cpu-temp">—</span></div>
+      <div class="cores" id="cpu-cores"></div>
+      <canvas class="spark" id="cpu-spark"></canvas>
+    </div>
+
+    <!-- GPU -->
+    <div class="card">
+      <h2>GPU <span class="sub" id="gpu-clk">—</span></h2>
+      <div class="model" id="gpu-model">—</div>
+      <div class="big" id="gpu-pct">0<span class="unit">%</span></div>
+      <div class="row"><span>Edge / Junction / Mem</span><span class="v" id="gpu-temps">—</span></div>
+      <div class="row"><span>Power · Fan</span><span class="v" id="gpu-power">—</span></div>
+      <canvas class="spark" id="gpu-spark"></canvas>
+    </div>
+
+    <!-- RAM -->
+    <div class="card">
+      <h2>Memory <span class="sub" id="ram-total">—</span></h2>
+      <div class="model" id="ram-model">—</div>
+      <div class="big" id="ram-pct">0<span class="unit">%</span></div>
+      <div class="row"><span id="ram-used">—</span><span class="v" id="ram-free">—</span></div>
+      <div class="bar"><span id="ram-bar" style="background: var(--ram);"></span></div>
+      <div class="row" style="margin-top:6px"><span>Swap</span><span class="v" id="swap">—</span></div>
+      <div class="bar"><span id="swap-bar" style="background:#5a6878;"></span></div>
+    </div>
+
+    <!-- VRAM -->
+    <div class="card">
+      <h2>VRAM <span class="sub" id="vram-total">—</span></h2>
+      <div class="big" id="vram-pct">0<span class="unit">%</span></div>
+      <div class="row"><span id="vram-used">—</span><span class="v" id="vram-free">—</span></div>
+      <div class="bar"><span id="vram-bar" style="background: var(--vram);"></span></div>
+      <canvas class="spark" id="vram-spark"></canvas>
+    </div>
+
+    <!-- Network -->
+    <div class="card">
+      <h2>Network <span class="sub" id="net-scale">—</span></h2>
+      <canvas class="netgauge" id="net-gauge"></canvas>
+    </div>
+
+    <!-- Disk / Storage -->
+    <div class="card">
+      <h2>Disk <span class="sub" id="nvme-temp">—</span></h2>
+      <div class="twocol">
+        <div>
+          <div class="lbl" style="color: var(--disk-r);">↓ read</div>
+          <div class="num" id="disk-read">0<span class="unit">B/s</span></div>
+        </div>
+        <div>
+          <div class="lbl" style="color: var(--disk-w);">↑ write</div>
+          <div class="num" id="disk-write">0<span class="unit">B/s</span></div>
+        </div>
+      </div>
+      <div class="drives" id="disk-drives"></div>
+      <canvas class="spark" id="disk-spark"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+
+  const HISTORY = 120;             // ~60s at 2Hz
+  const SAMPLE_MS = 500;
+  const FRAME_MS = 1000 / 60;       // cap render at 60 FPS
+  const series = {
+    cpu: [], gpu: [], vram: [],
+    net_up: [], net_down: [],
+    disk_r: [], disk_w: [],
+  };
+  let lastSampleAt = performance.now();
+  const COL = name => getComputedStyle(document.documentElement).getPropertyValue('--' + name).trim();
+  const COLORS = {};
+  ['cpu','gpu','vram','net-up','net-down','disk-r','disk-w'].forEach(k => COLORS[k] = COL(k));
+
+  function fmtBytes(n) {
+    if (n == null) return "—";
+    const u = ["B","KB","MB","GB","TB"];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return n.toFixed(n < 10 && i > 0 ? 1 : 0) + " " + u[i];
+  }
+  function fmtBps(n) {
+    if (n == null) return ["0", "B/s"];
+    const u = ["B/s","KB/s","MB/s","GB/s"];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return [n.toFixed(n < 10 && i > 0 ? 1 : 0), u[i]];
+  }
+  function fmtUptime(s) {
+    if (!s) return "—";
+    const d = Math.floor(s/86400);
+    const h = Math.floor((s%86400)/3600);
+    const m = Math.floor((s%3600)/60);
+    if (d) return `up ${d}d ${h}h`;
+    if (h) return `up ${h}h ${m}m`;
+    return `up ${m}m`;
+  }
+
+  function setNum(el, v, unit) {
+    el.firstChild.nodeValue = v;
+    el.querySelector(".unit").textContent = unit;
+  }
+  function tempClass(t, warn, crit) {
+    if (t == null) return "";
+    if (t >= crit) return "crit";
+    if (t >= warn) return "warn";
+    return "";
+  }
+
+  function prep(canvas) {
+    const dpr = (window.devicePixelRatio || 1) * 1.5;   // 1.5× super-sample — smooth but cheap on Pi Zero
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+      canvas.width = w * dpr; canvas.height = h * dpr;
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.clearRect(0,0,w,h);
+    return {ctx, w, h};
+  }
+
+  // Build screen points; lerp the most recent point's Y from prev sample
+  // over the sample window so the right edge rises/falls smoothly.
+  function buildPoints(data, max, startX, stepX, h, t) {
+    const pts = new Array(data.length);
+    for (let i = 0; i < data.length; i++) {
+      let v = data[i];
+      if (i === data.length - 1 && i > 0) {
+        v = data[i - 1] + (data[i] - data[i - 1]) * t;
+      }
+      pts[i] = {x: startX + i * stepX, y: h - (v / max) * (h - 4) - 2};
+    }
+    return pts;
+  }
+
+  // Catmull-Rom-ish smoothing via cubic Bezier with the standard 1/6 tangent.
+  function strokeSmooth(ctx, pts) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2] || p2;
+      const c1x = p1.x + (p2.x - p0.x) / 6;
+      const c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6;
+      const c2y = p2.y - (p3.y - p1.y) / 6;
+      ctx.bezierCurveTo(c1x, c1y, c2x, c2y, p2.x, p2.y);
+    }
+    ctx.stroke();
+  }
+
+  function drawSpark(canvas, data, color, scrollFrac, fill = true) {
+    const {ctx, w, h} = prep(canvas);
+    if (data.length < 2) return;
+    const max = Math.max(1, ...data);
+    const stepX = w / (HISTORY - 1);
+    const startX = (HISTORY - data.length) * stepX - scrollFrac * stepX;
+    const pts = buildPoints(data, max, startX, stepX, h, scrollFrac);
+    ctx.lineWidth = 2.4;
+    ctx.strokeStyle = color;
+    ctx.lineJoin = "round";
+    strokeSmooth(ctx, pts);
+    if (fill) {
+      ctx.lineTo(pts[pts.length - 1].x, h);
+      ctx.lineTo(pts[0].x, h);
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, color + "aa");
+      grad.addColorStop(0.5, color + "55");
+      grad.addColorStop(1, color + "10");
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+  }
+
+  function niceMax(v) {
+    if (v <= 0) return 1024 * 1024;                    // 1 MB/s floor
+    const steps = [1, 2, 5, 10, 20, 50, 100, 200, 500];
+    const units = [1024, 1024 * 1024, 1024 * 1024 * 1024];   // KB, MB, GB
+    for (const u of units) {
+      for (const s of steps) {
+        if (v <= s * u) return s * u;
+      }
+    }
+    return Math.pow(2, Math.ceil(Math.log2(v)));
+  }
+
+  const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
+
+  function lerpLatest(arr, t, ease = true) {
+    if (arr.length === 0) return 0;
+    if (arr.length < 2) return arr[arr.length - 1];
+    const a = arr[arr.length - 2], b = arr[arr.length - 1];
+    const k = ease ? easeOutCubic(t) : t;
+    return a + (b - a) * k;
+  }
+
+  // Continuous exponential smoothing — no discrete lerp segments, so the needle never
+  // "restarts" at sample boundaries. State is chased toward target every frame.
+  const gaugeState = { netMax: 1024 * 1024, netDown: 0, netUp: 0 };
+  function smoothToward(state, key, target, kUp, kDown) {
+    const cur = state[key];
+    const k = target > cur ? kUp : kDown;
+    state[key] = cur + (target - cur) * k;
+    return state[key];
+  }
+
+  function drawGauge(ctx, cx, cy, r, lw, frac, color, valueLines, label) {
+    frac = Math.max(0, Math.min(1, frac));
+    // 3/4 circle with the gap centered at the bottom.
+    // start = 135° (bottom-left), sweep = 270° clockwise to 45° (bottom-right).
+    const start = Math.PI * 0.75;
+    const span = Math.PI * 1.5;
+    // Track
+    ctx.beginPath();
+    ctx.lineWidth = lw;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#2f3a48";
+    ctx.arc(cx, cy, r, start, start + span);
+    ctx.stroke();
+    // Fill
+    if (frac > 0.001) {
+      ctx.beginPath();
+      ctx.lineWidth = lw;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = color;
+      ctx.arc(cx, cy, r, start, start + frac * span);
+      ctx.stroke();
+    }
+    // Big value, centered in the gauge
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "#fff";
+    ctx.font = '700 22px ui-monospace, "DejaVu Sans Mono", monospace';
+    ctx.fillText(valueLines[0], cx, cy - 2);
+    ctx.fillStyle = "#e8eef5";
+    ctx.font = '500 12px ui-monospace, "DejaVu Sans Mono", monospace';
+    ctx.fillText(valueLines[1], cx, cy + 14);
+    // Label sits in the bottom gap of the 3/4 ring
+    ctx.fillStyle = color;
+    ctx.font = '700 12px sans-serif';
+    ctx.fillText(label, cx, cy + r + lw * 0.6);
+  }
+
+  function drawNetGauge(canvas, t) {
+    const {ctx, w, h} = prep(canvas);
+    // Smooth (lerped) value drives the arc; raw latest sample drives the text — so digits only step at the sample rate.
+    const downRaw = series.net_down[series.net_down.length - 1] ?? 0;
+    const upRaw = series.net_up[series.net_up.length - 1] ?? 0;
+    // Continuous chase toward target each frame — no segment boundaries → no stutter.
+    const downSmooth = smoothToward(gaugeState, "netDown", downRaw, 0.10, 0.10);
+    const upSmooth = smoothToward(gaugeState, "netUp", upRaw, 0.10, 0.10);
+    const targetMax = niceMax(Math.max(...series.net_down, ...series.net_up, 1));
+    const max = smoothToward(gaugeState, "netMax", targetMax, 0.05, 0.012);
+    const cx1 = w * 0.25, cx2 = w * 0.75;
+    const cy = h * 0.46;
+    // 3/4 circle: vertical extent ≈ r + r*sin(45°) ≈ 1.71r, plus label below
+    // Sized so each gauge (incl. line width) stays clear of the centre — no overlap.
+    const r = Math.min(w * 0.18, h * 0.40);
+    const lw = Math.max(8, r * 0.22);
+    const dParts = fmtBps(downRaw), uParts = fmtBps(upRaw);
+    drawGauge(ctx, cx1, cy, r, lw, downSmooth / max, COLORS["net-down"], [dParts[0], dParts[1]], "↓ DOWN");
+    drawGauge(ctx, cx2, cy, r, lw, upSmooth / max, COLORS["net-up"], [uParts[0], uParts[1]], "↑ UP");
+    // update scale label
+    const m = fmtBps(max);
+    const scaleEl = document.getElementById("net-scale");
+    if (scaleEl) scaleEl.textContent = `max ${m[0]} ${m[1]}`;
+  }
+
+  function drawSparkDual(canvas, up, down, cUp, cDown, scrollFrac) {
+    const {ctx, w, h} = prep(canvas);
+    if (down.length < 2) return;
+    const max = Math.max(1, ...up, ...down);
+    const stepX = w / (HISTORY - 1);
+    const startX = (HISTORY - down.length) * stepX - scrollFrac * stepX;
+    const drawLine = (data, color) => {
+      const pts = buildPoints(data, max, startX, stepX, h, scrollFrac);
+      ctx.lineWidth = 2.4;
+      ctx.strokeStyle = color;
+      ctx.lineJoin = "round";
+      strokeSmooth(ctx, pts);
+    };
+    drawLine(down, cDown);
+    drawLine(up, cUp);
+  }
+
+  function pushSeries(name, v) {
+    const arr = series[name];
+    arr.push(v);
+    if (arr.length > HISTORY) arr.shift();
+  }
+
+  function ensureCores(n) {
+    const c = $("cpu-cores");
+    if (c.childElementCount === n) return;
+    c.innerHTML = "";
+    for (let i = 0; i < n; i++) {
+      const d = document.createElement("div");
+      d.className = "core";
+      d.innerHTML = "<i></i>";
+      c.appendChild(d);
+    }
+  }
+
+  function update(d) {
+    lastSampleAt = performance.now();
+    $("host").textContent = d.host || "—";
+    $("uptime").textContent = fmtUptime(d.uptime_s);
+    $("clock").textContent = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+
+    // CPU
+    const cpu = d.cpu || {};
+    setNum($("cpu-pct"), Math.round(cpu.usage ?? 0), "%");
+    $("cpu-model").textContent = cpu.model ? cpu.model.replace(/\s*\d+-Core Processor\s*$/i, "") : "—";
+    $("cpu-freq").textContent = cpu.freq_mhz ? (cpu.freq_mhz/1000).toFixed(2) + " GHz" : "";
+    const cpuTemp = cpu.temp_c != null ? cpu.temp_c.toFixed(1) + "°C" : "—";
+    const cpuFan = cpu.fan_rpm != null ? cpu.fan_rpm + " rpm" : "—";
+    const cpuPow = cpu.power_w != null ? cpu.power_w.toFixed(0) + " W" : "—";
+    $("cpu-temp").textContent = `${cpuTemp} · ${cpuFan} · ${cpuPow}`;
+    $("cpu-temp").className = "v " + tempClass(cpu.temp_c, 75, 90);
+    pushSeries("cpu", cpu.usage ?? 0);
+    if (cpu.per_core) {
+      ensureCores(cpu.per_core.length);
+      const cores = $("cpu-cores").children;
+      cpu.per_core.forEach((p, i) => {
+        cores[i].firstElementChild.style.height = p + "%";
+      });
+    }
+
+    // GPU
+    const gpu = d.gpu || {};
+    setNum($("gpu-pct"), Math.round(gpu.usage ?? 0), "%");
+    $("gpu-model").textContent = gpu.model || "—";
+    $("gpu-clk").textContent = (gpu.sclk_mhz ? gpu.sclk_mhz + " MHz" : "");
+    const te = gpu.temp_edge, tj = gpu.temp_junction, tm = gpu.temp_mem;
+    $("gpu-temps").textContent = [te, tj, tm].map(t => t != null ? t.toFixed(0) + "°" : "—").join(" / ");
+    $("gpu-temps").className = "v " + tempClass(Math.max(te ?? 0, tj ?? 0, tm ?? 0), 85, 100);
+    const fan = gpu.fan_rpm != null ? gpu.fan_rpm + " rpm" : "—";
+    const pw = gpu.power_w != null ? gpu.power_w.toFixed(0) + " W" : "—";
+    $("gpu-power").textContent = pw + " · " + fan;
+    pushSeries("gpu", gpu.usage ?? 0);
+
+    // RAM
+    const ram = d.ram || {};
+    setNum($("ram-pct"), Math.round(ram.percent ?? 0), "%");
+    $("ram-model").textContent = ram.model || " ";
+    $("ram-total").textContent = ram.total ? fmtBytes(ram.total) : "";
+    $("ram-used").textContent = ram.used != null ? fmtBytes(ram.used) + " used" : "—";
+    $("ram-free").textContent = ram.total ? fmtBytes(ram.total - ram.used) + " free" : "";
+    $("ram-bar").style.width = (ram.percent ?? 0) + "%";
+    $("swap").textContent = ram.swap_total ? `${fmtBytes(ram.swap_used)} / ${fmtBytes(ram.swap_total)}` : "—";
+    $("swap-bar").style.width = (ram.swap_percent ?? 0) + "%";
+
+    // VRAM
+    if (gpu && gpu.vram_total) {
+      const vp = (gpu.vram_used / gpu.vram_total) * 100;
+      setNum($("vram-pct"), vp.toFixed(0), "%");
+      $("vram-total").textContent = fmtBytes(gpu.vram_total);
+      $("vram-used").textContent = fmtBytes(gpu.vram_used) + " used";
+      $("vram-free").textContent = fmtBytes(gpu.vram_total - gpu.vram_used) + " free";
+      $("vram-bar").style.width = vp + "%";
+      pushSeries("vram", vp);
+    }
+
+    // Network
+    const net = d.net || {};
+    pushSeries("net_up", net.up_bps ?? 0);
+    pushSeries("net_down", net.down_bps ?? 0);
+    $("nvme-temp").textContent = (net.nvme_temps_c && net.nvme_temps_c.length)
+      ? net.nvme_temps_c.map(t => t.toFixed(0)+"°").join(" / ") : "";
+
+    // Disk
+    const disk = d.disk || {};
+    const r = fmtBps(disk.read_bps), w = fmtBps(disk.write_bps);
+    setNum($("disk-read"), r[0], r[1]);
+    setNum($("disk-write"), w[0], w[1]);
+    pushSeries("disk_r", disk.read_bps ?? 0);
+    pushSeries("disk_w", disk.write_bps ?? 0);
+    renderDrives(disk.drives || []);
+  }
+
+  function renderDrives(drives) {
+    const root = $("disk-drives");
+    // Stable signature so we don't churn the DOM every tick
+    const sig = drives.map(d => d.name + "|" + d.kind).join(",");
+    if (root.dataset.sig !== sig) {
+      root.dataset.sig = sig;
+      root.innerHTML = "";
+      drives.forEach(d => {
+        const row = document.createElement("div");
+        row.className = "drive";
+        const label = d.kind === "nvme" ? "N" : (d.kind === "ssd" ? "S" : "H");
+        const name = (d.model || d.name).replace(/^WDC\s+/i, "WD ");
+        row.innerHTML = `
+          <span class="badge ${d.kind}">${label}</span>
+          <span class="nm" title="${d.name} · ${d.model || ''}">${name}</span>
+          <span class="sz" data-role="sz"></span>
+          <span class="tp" data-role="tp"></span>
+          <div class="bar"><span data-role="bar" style="background: var(--disk-r);"></span></div>`;
+        root.appendChild(row);
+      });
+    }
+    [...root.children].forEach((row, i) => {
+      const d = drives[i]; if (!d) return;
+      const sz = row.querySelector('[data-role="sz"]');
+      const tp = row.querySelector('[data-role="tp"]');
+      const bar = row.querySelector('[data-role="bar"]');
+      if (d.usage) {
+        sz.textContent = `${fmtBytes(d.usage.used)} / ${fmtBytes(d.size)}`;
+        bar.style.width = d.usage.percent + "%";
+        bar.style.background = d.usage.percent > 90 ? "var(--crit)"
+                             : d.usage.percent > 75 ? "var(--warn)"
+                             : (d.kind === "nvme" ? "var(--disk-r)" : "#94a3b8");
+      } else {
+        sz.textContent = fmtBytes(d.size);
+        bar.style.width = "0%";
+      }
+      tp.textContent = d.temp_c != null ? d.temp_c.toFixed(0) + "°" : "—";
+    });
+  }
+
+  // Continuous render loop, capped at 60 FPS
+  let lastFrame = 0;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (now - lastFrame < FRAME_MS - 1) return;
+    lastFrame = now;
+    const t = Math.min(1, (now - lastSampleAt) / SAMPLE_MS);
+    drawSpark($("cpu-spark"), series.cpu, COLORS["cpu"], t);
+    drawSpark($("gpu-spark"), series.gpu, COLORS["gpu"], t);
+    drawSpark($("vram-spark"), series.vram, COLORS["vram"], t);
+    drawNetGauge($("net-gauge"), t);
+    drawSparkDual($("disk-spark"), series.disk_w, series.disk_r, COLORS["disk-w"], COLORS["disk-r"], t);
+  }
+  requestAnimationFrame(frame);
+
+  // WebSocket with auto-reconnect
+  let ws = null;
+  let backoff = 500;
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
+    ws.onopen = () => { $("dot").classList.add("ok"); backoff = 500; };
+    ws.onmessage = e => {
+      try { update(JSON.parse(e.data)); } catch {}
+    };
+    ws.onclose = () => {
+      $("dot").classList.remove("ok");
+      setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 1.5, 5000);
+    };
+    ws.onerror = () => { try { ws.close(); } catch {} };
+  }
+  connect();
+
+  // tick clock + date independently
+  function tickClock() {
+    const d = new Date();
+    $("clock").textContent = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    $("date").textContent = d.toLocaleDateString([], {weekday:'short', month:'short', day:'numeric'});
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
+
+})();
+</script>
+</body>
+</html>
